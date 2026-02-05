@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THE CUBE - Neon Overdrive</title>
+    <style>
+        :root {
+            --neon-red: #ff003c;
+            --neon-blue: #00f3ff;
+            --neon-green: #00ff41;
+            --neon-purple: #ff00ff;
+        }
+
+        body {
+            margin: 0; padding: 0;
+            display: flex; justify-content: center; align-items: center;
+            height: 100vh; background-color: #020205;
+            color: white; font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+
+        #bg-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+
+        #game-container { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; }
+
+        #menu {
+            text-align: center; background: rgba(0,0,0,0.9);
+            padding: 40px; border: 2px solid var(--neon-blue);
+            box-shadow: 0 0 20px var(--neon-blue);
+        }
+
+        h1 { font-size: 70px; color: white; text-shadow: 0 0 15px var(--neon-blue); margin: 0; }
+
+        button {
+            padding: 15px 40px; font-size: 20px; margin-top: 20px;
+            background: transparent; color: var(--neon-blue);
+            border: 2px solid var(--neon-blue); cursor: pointer;
+            text-transform: uppercase; box-shadow: 0 0 10px var(--neon-blue);
+        }
+
+        #ui { width: 800px; display: none; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+
+        .bar-bg { width: 100%; height: 12px; background: rgba(255,255,255,0.1); border: 1px solid #333; }
+        .fill { height: 100%; transition: width 0.3s ease; }
+        
+        #hp-fill { background: var(--neon-blue); box-shadow: 0 0 15px var(--neon-blue); width: 100%; }
+        #xp-fill { background: var(--neon-green); box-shadow: 0 0 15px var(--neon-green); width: 0%; }
+        #ability-fill { background: var(--neon-purple); box-shadow: 0 0 15px var(--neon-purple); width: 0%; }
+
+        canvas#canvas { 
+            background: #000; border: 2px solid #444; 
+            display: none; box-shadow: 0 0 50px rgba(0,243,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="bg-canvas"></canvas>
+
+    <div id="game-container">
+        <div id="menu">
+            <h1>THE CUBE</h1>
+            <p style="color: var(--neon-blue)">NEON PROTOCOL ACTIVATED</p>
+            <button onclick="start()">INICIAR PROTOCOLO</button>
+        </div>
+
+        <div id="ui">
+            <div style="display:flex; justify-content: space-between; font-size:12px; color: var(--neon-green);">
+                <span id="lvl-txt">NIVEL: 1</span> <span id="count-txt">0/5</span>
+            </div>
+            <div class="bar-bg"><div id="xp-fill" class="fill"></div></div>
+            <div class="bar-bg" style="margin-top:5px;"><div id="hp-fill" class="fill"></div></div>
+            <div class="bar-bg" style="margin-top:5px;"><div id="ability-fill" class="fill"></div></div>
+            <div style="font-size:10px; color: var(--neon-purple); display:flex; justify-content: space-between;">
+                <span>OVERDRIVE (E)</span> <span id="ability-timer">BLOQUEADO</span>
+            </div>
+        </div>
+
+        <canvas id="canvas" width="800" height="500"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const bgCanvas = document.getElementById('bg-canvas');
+        const bgCtx = bgCanvas.getContext('2d');
+        
+        let audioCtx, gameRunning = false, nivel = 1, vida = 5, maxVida = 5;
+        let enemigosKilled = 0, totalEnemigosNivel = 5, hasAbility = false, lastAbility = 0;
+        let shakeTime = 0, player, keys, bullets, enemyBullets, enemies, shockwaves;
+
+        // --- SISTEMA DE SONIDO ---
+        function playSound(freq, type, duration, vol, slide = true) {
+            if(!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            if(slide) osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + duration);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // --- FONDO NEON ---
+        function drawBg() {
+            bgCanvas.width = window.innerWidth; bgCanvas.height = window.innerHeight;
+            bgCtx.fillStyle = '#020205'; bgCtx.fillRect(0,0,bgCanvas.width, bgCanvas.height);
+            bgCtx.strokeStyle = 'rgba(0, 243, 255, 0.1)';
+            for(let i=0; i<bgCanvas.width; i+=60) {
+                bgCtx.beginPath(); bgCtx.moveTo(i, 0); bgCtx.lineTo(i, bgCanvas.height); bgCtx.stroke();
+            }
+            requestAnimationFrame(drawBg);
+        }
+        drawBg();
+
+        function start() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            document.getElementById('menu').style.display = 'none';
+            document.getElementById('ui').style.display = 'flex';
+            canvas.style.display = 'block';
+            player = { x: 385, y: 235, w: 30, h: 30, z: 0, vVel: 0, jumping: false, speed: 5 };
+            keys = {}; bullets = []; enemyBullets = []; enemies = []; shockwaves = [];
+            nivel = 1; vida = 5; enemigosKilled = 0; totalEnemigosNivel = 5;
+            gameRunning = true;
+            spawnEnemies();
+            gameLoop();
+        }
+
+        function spawnEnemies() {
+            let needed = Math.min(3, (totalEnemigosNivel - enemigosKilled) - enemies.length);
+            for(let i=0; i<needed; i++) {
+                let isBoss = (nivel % 5 === 0 && (enemigosKilled + enemies.length + 1) === totalEnemigosNivel);
+                enemies.push({
+                    x: Math.random() > 0.5 ? -100 : 900, y: Math.random() * 400,
+                    w: isBoss ? 80 : 25, h: isBoss ? 80 : 25,
+                    hp: isBoss ? 100 : 1, maxHp: isBoss ? 100 : 1,
+                    isBoss: isBoss, speed: isBoss ? 1.5 : 2.5,
+                    lastShot: Date.now(), nextSpecial: Date.now() + 2000
+                });
+            }
+        }
+
+        window.onkeydown = (e) => {
+            keys[e.key.toLowerCase()] = true;
+            if(e.key.toLowerCase() === 'e' && hasAbility && Date.now() - lastAbility > 10000) {
+                lastAbility = Date.now();
+                shakeTime = 35;
+                playSound(60, 'sawtooth', 2.0, 0.5, false); // SONIDO LARGO
+                shockwaves.push({ x: player.x+15, y: player.y+15, r: 0, byPlayer: true, color: '#ff00ff' });
+                enemies.forEach((en, i) => {
+                    if(!en.isBoss) { enemies.splice(i,1); enemigosKilled++; spawnEnemies(); }
+                });
+            }
+        };
+        window.onkeyup = (e) => keys[e.key.toLowerCase()] = false;
+
+        canvas.onmousedown = () => {
+            if(!gameRunning) return;
+            playSound(500, 'triangle', 0.1, 0.15);
+            const rect = canvas.getBoundingClientRect();
+            const angle = Math.atan2((event.clientY - rect.top) - (player.y + 15), (event.clientX - rect.left) - (player.x + 15));
+            bullets.push({ x: player.x + 15, y: player.y + 15, vx: Math.cos(angle)*12, vy: Math.sin(angle)*12 });
+        };
+
+        function gameLoop() {
+            if(!gameRunning) return;
+            
+            // UI
+            document.getElementById('lvl-txt').innerText = "NIVEL: " + nivel;
+            document.getElementById('count-txt').innerText = enemigosKilled + "/" + totalEnemigosNivel;
+            document.getElementById('xp-fill').style.width = (enemigosKilled/totalEnemigosNivel)*100 + "%";
+            document.getElementById('hp-fill').style.width = (vida/5)*100 + "%";
+            let cd = Math.max(0, 10 - (Date.now() - lastAbility)/1000);
+            document.getElementById('ability-fill').style.width = hasAbility ? (100 - (cd*10)) + "%" : "0%";
+            document.getElementById('ability-timer').innerText = hasAbility ? (cd > 0 ? Math.ceil(cd)+"S" : "LISTO") : "BLOQUEADO";
+
+            let sx = 0, sy = 0;
+            if(shakeTime > 0) { sx = (Math.random()-0.5)*20; sy = (Math.random()-0.5)*20; shakeTime--; }
+
+            // Lógica Salto
+            if(keys[' '] && !player.jumping) { player.jumping = true; player.vVel = -13; }
+            if(player.jumping) {
+                player.z += player.vVel; player.vVel += 0.8;
+                if(player.z >= 0) { player.z = 0; player.jumping = false; }
+            }
+
+            // Movimiento
+            if(keys['w'] && player.y > 0) player.y -= player.speed;
+            if(keys['s'] && player.y < 470) player.y += player.speed;
+            if(keys['a'] && player.x > 0) player.x -= player.speed;
+            if(keys['d'] && player.x < 770) player.x += player.speed;
+
+            // Enemigos y Ondas
+            enemies.forEach((en, i) => {
+                let dx = (player.x + 15) - (en.x + en.w/2);
+                let dy = (player.y + 15) - (en.y + en.h/2);
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                en.x += (dx/dist) * en.speed; en.y += (dy/dist) * en.speed;
+
+                // LOGICA ONDA JEFE
+                if(en.isBoss && Date.now() > en.nextSpecial) {
+                    shockwaves.push({ x: en.x+en.w/2, y: en.y+en.h/2, r: 0, byPlayer: false, color: '#ff003c' });
+                    en.nextSpecial = Date.now() + 3500;
+                    playSound(100, 'sine', 0.6, 0.2);
+                }
+
+                if(Date.now() - en.lastShot > (en.isBoss ? 700 : 1800)) {
+                    playSound(150, 'square', 0.1, 0.05, false);
+                    let angle = Math.atan2(dy, dx);
+                    enemyBullets.push({ x: en.x+en.w/2, y: en.y+en.h/2, vx: Math.cos(angle)*6, vy: Math.sin(angle)*6 });
+                    en.lastShot = Date.now();
+                }
+            });
+
+            // Balas
+            bullets.forEach((b, i) => {
+                b.x += b.vx; b.y += b.vy;
+                enemies.forEach((en, ei) => {
+                    if(b.x > en.x && b.x < en.x+en.w && b.y > en.y && b.y < en.y+en.h) {
+                        en.hp--; bullets.splice(i, 1);
+                        if(en.hp <= 0) {
+                            if(en.isBoss) hasAbility = true;
+                            enemies.splice(ei, 1); enemigosKilled++;
+                            if(enemigosKilled >= totalEnemigosNivel) { nivel++; enemigosKilled = 0; totalEnemigosNivel += 5; vida = 5; }
+                            spawnEnemies();
+                        }
+                    }
+                });
+            });
+
+            enemyBullets.forEach((eb, i) => {
+                eb.x += eb.vx; eb.y += eb.vy;
+                if(eb.x > player.x && eb.x < player.x+30 && eb.y > player.y && eb.y < player.y+30 && !player.jumping) {
+                    enemyBullets.splice(i, 1); vida--; shakeTime = 5;
+                    if(vida <= 0) location.reload();
+                }
+            });
+
+            shockwaves.forEach((sw, i) => {
+                sw.r += 8;
+                if(!sw.byPlayer) {
+                    let d = Math.sqrt(Math.pow((player.x+15)-sw.x, 2) + Math.pow((player.y+15)-sw.y, 2));
+                    if(Math.abs(d - sw.r) < 15 && !player.jumping) { vida--; shockwaves.splice(i,1); }
+                }
+                if(sw.r > 600) shockwaves.splice(i,1);
+            });
+
+            // --- DIBUJO ---
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.clearRect(-100, -100, canvas.width+200, canvas.height+200);
+
+            // 1. ONDAS (Debajo de todo)
+            shockwaves.forEach(sw => {
+                ctx.shadowBlur = 20; ctx.shadowColor = sw.color;
+                ctx.strokeStyle = sw.color; ctx.lineWidth = 5;
+                ctx.beginPath(); ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI*2); ctx.stroke();
+            });
+
+            // 2. BALAS
+            ctx.shadowBlur = 10;
+            bullets.forEach(b => { ctx.shadowColor = "white"; ctx.fillStyle = "white"; ctx.fillRect(b.x, b.y, 6, 6); });
+            enemyBullets.forEach(eb => { ctx.shadowColor = "#ff003c"; ctx.fillStyle = "#ff003c"; ctx.fillRect(eb.x, eb.y, 6, 6); });
+
+            // 3. ENEMIGOS
+            enemies.forEach(en => {
+                let isWhite = (Math.floor(Date.now()/250) % 2 === 0);
+                let color = en.isBoss ? (isWhite ? "#fff" : "#00f3ff") : (isWhite ? "#fff" : "#ff003c");
+                ctx.shadowBlur = 15; ctx.shadowColor = color; ctx.fillStyle = color;
+                ctx.fillRect(en.x, en.y, en.w, en.h);
+                if(en.isBoss) {
+                    ctx.shadowBlur = 0; ctx.fillStyle = "white";
+                    ctx.fillRect(en.x, en.y-15, (en.hp/en.maxHp)*en.w, 6);
+                }
+            });
+
+            // 4. JUGADOR (Siempre arriba)
+            ctx.shadowBlur = 25; ctx.shadowColor = "white";
+            ctx.fillStyle = "white";
+            ctx.fillRect(player.x, player.y + player.z, 30, 30);
+
+            ctx.restore();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
