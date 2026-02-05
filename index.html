@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>THE CUBE - Neon Overdrive</title>
+    <title>THE CUBE - Physical Overdrive</title>
     <style>
         :root {
             --neon-red: #ff003c;
             --neon-blue: #00f3ff;
             --neon-green: #00ff41;
             --neon-purple: #ff00ff;
+            --neon-yellow: #ffff00;
         }
 
         body {
@@ -47,6 +48,7 @@
         #hp-fill { background: var(--neon-blue); box-shadow: 0 0 15px var(--neon-blue); width: 100%; }
         #xp-fill { background: var(--neon-green); box-shadow: 0 0 15px var(--neon-green); width: 0%; }
         #ability-fill { background: var(--neon-purple); box-shadow: 0 0 15px var(--neon-purple); width: 0%; }
+        #heal-fill { background: var(--neon-yellow); box-shadow: 0 0 15px var(--neon-yellow); width: 100%; }
 
         canvas#canvas { 
             background: #000; border: 2px solid #444; 
@@ -61,7 +63,8 @@
     <div id="game-container">
         <div id="menu">
             <h1>THE CUBE</h1>
-            <p style="color: var(--neon-blue)">NEON PROTOCOL ACTIVATED</p>
+            <p style="color: var(--neon-blue)">PHYSICAL SWEEP PROTOCOL</p>
+            <p style="font-size: 12px;">Q: Reparar | E: Barrido Overdrive | ESPACIO: Saltar</p>
             <button onclick="start()">INICIAR PROTOCOLO</button>
         </div>
 
@@ -70,10 +73,19 @@
                 <span id="lvl-txt">NIVEL: 1</span> <span id="count-txt">0/5</span>
             </div>
             <div class="bar-bg"><div id="xp-fill" class="fill"></div></div>
-            <div class="bar-bg" style="margin-top:5px;"><div id="hp-fill" class="fill"></div></div>
-            <div class="bar-bg" style="margin-top:5px;"><div id="ability-fill" class="fill"></div></div>
-            <div style="font-size:10px; color: var(--neon-purple); display:flex; justify-content: space-between;">
-                <span>OVERDRIVE (E)</span> <span id="ability-timer">BLOQUEADO</span>
+            
+            <div style="font-size:10px; color: var(--neon-blue); margin-top: 5px;">INTEGRIDAD (HP)</div>
+            <div class="bar-bg"><div id="hp-fill" class="fill"></div></div>
+            
+            <div style="display:flex; gap: 10px; margin-top: 5px;">
+                <div style="flex:1">
+                    <div style="font-size:10px; color: var(--neon-purple);">OVERDRIVE (E)</div>
+                    <div class="bar-bg"><div id="ability-fill" class="fill"></div></div>
+                </div>
+                <div style="flex:1">
+                    <div style="font-size:10px; color: var(--neon-yellow);">REPARAR (Q)</div>
+                    <div class="bar-bg"><div id="heal-fill" class="fill"></div></div>
+                </div>
             </div>
         </div>
 
@@ -86,11 +98,12 @@
         const bgCanvas = document.getElementById('bg-canvas');
         const bgCtx = bgCanvas.getContext('2d');
         
-        let audioCtx, gameRunning = false, nivel = 1, vida = 5, maxVida = 5;
-        let enemigosKilled = 0, totalEnemigosNivel = 5, hasAbility = false, lastAbility = 0;
+        let audioCtx, gameRunning = false, nivel = 1;
+        let vida = 10, maxVida = 10;
+        let enemigosKilled = 0, totalEnemigosNivel = 5;
+        let hasAbility = false, lastAbility = 0, lastHeal = 0;
         let shakeTime = 0, player, keys, bullets, enemyBullets, enemies, shockwaves;
 
-        // --- SISTEMA DE SONIDO ---
         function playSound(freq, type, duration, vol, slide = true) {
             if(!audioCtx) return;
             const osc = audioCtx.createOscillator();
@@ -104,7 +117,6 @@
             osc.start(); osc.stop(audioCtx.currentTime + duration);
         }
 
-        // --- FONDO NEON ---
         function drawBg() {
             bgCanvas.width = window.innerWidth; bgCanvas.height = window.innerHeight;
             bgCtx.fillStyle = '#020205'; bgCtx.fillRect(0,0,bgCanvas.width, bgCanvas.height);
@@ -123,7 +135,7 @@
             canvas.style.display = 'block';
             player = { x: 385, y: 235, w: 30, h: 30, z: 0, vVel: 0, jumping: false, speed: 5 };
             keys = {}; bullets = []; enemyBullets = []; enemies = []; shockwaves = [];
-            nivel = 1; vida = 5; enemigosKilled = 0; totalEnemigosNivel = 5;
+            nivel = 1; vida = 10; enemigosKilled = 0; totalEnemigosNivel = 5;
             gameRunning = true;
             spawnEnemies();
             gameLoop();
@@ -138,21 +150,33 @@
                     w: isBoss ? 80 : 25, h: isBoss ? 80 : 25,
                     hp: isBoss ? 100 : 1, maxHp: isBoss ? 100 : 1,
                     isBoss: isBoss, speed: isBoss ? 1.5 : 2.5,
-                    lastShot: Date.now(), nextSpecial: Date.now() + 2000
+                    lastShot: Date.now(), nextSpecial: Date.now() + 2000,
+                    hitByWave: [] // Evita que una misma onda lo golpee mil veces
                 });
             }
         }
 
         window.onkeydown = (e) => {
             keys[e.key.toLowerCase()] = true;
+            
             if(e.key.toLowerCase() === 'e' && hasAbility && Date.now() - lastAbility > 10000) {
                 lastAbility = Date.now();
-                shakeTime = 35;
-                playSound(60, 'sawtooth', 2.0, 0.5, false); // SONIDO LARGO
-                shockwaves.push({ x: player.x+15, y: player.y+15, r: 0, byPlayer: true, color: '#ff00ff' });
-                enemies.forEach((en, i) => {
-                    if(!en.isBoss) { enemies.splice(i,1); enemigosKilled++; spawnEnemies(); }
+                shakeTime = 40;
+                playSound(50, 'sawtooth', 2.0, 0.6, false);
+                // Crear onda con ID único para control de daño
+                shockwaves.push({ 
+                    id: Date.now(),
+                    x: player.x+15, y: player.y+15, 
+                    r: 0, byPlayer: true, color: '#ff00ff',
+                    damage: 100 // Suficiente para instakill normales
                 });
+            }
+
+            if(e.key.toLowerCase() === 'q' && Date.now() - lastHeal > 10000) {
+                lastHeal = Date.now();
+                vida = Math.min(maxVida, vida + 5);
+                playSound(800, 'sine', 0.5, 0.3, false);
+                shockwaves.push({ id: 0, x: player.x+15, y: player.y+15, r: 0, byPlayer: true, color: '#00ff41', fast: true, noDamage: true });
             }
         };
         window.onkeyup = (e) => keys[e.key.toLowerCase()] = false;
@@ -172,43 +196,78 @@
             document.getElementById('lvl-txt').innerText = "NIVEL: " + nivel;
             document.getElementById('count-txt').innerText = enemigosKilled + "/" + totalEnemigosNivel;
             document.getElementById('xp-fill').style.width = (enemigosKilled/totalEnemigosNivel)*100 + "%";
-            document.getElementById('hp-fill').style.width = (vida/5)*100 + "%";
-            let cd = Math.max(0, 10 - (Date.now() - lastAbility)/1000);
-            document.getElementById('ability-fill').style.width = hasAbility ? (100 - (cd*10)) + "%" : "0%";
-            document.getElementById('ability-timer').innerText = hasAbility ? (cd > 0 ? Math.ceil(cd)+"S" : "LISTO") : "BLOQUEADO";
+            document.getElementById('hp-fill').style.width = (vida/maxVida)*100 + "%";
+            let cdE = Math.max(0, 10 - (Date.now() - lastAbility)/1000);
+            document.getElementById('ability-fill').style.width = hasAbility ? (100 - (cdE*10)) + "%" : "0%";
+            let cdQ = Math.max(0, 10 - (Date.now() - lastHeal)/1000);
+            document.getElementById('heal-fill').style.width = (100 - (cdQ*10)) + "%";
 
             let sx = 0, sy = 0;
-            if(shakeTime > 0) { sx = (Math.random()-0.5)*20; sy = (Math.random()-0.5)*20; shakeTime--; }
+            if(shakeTime > 0) { sx = (Math.random()-0.5)*15; sy = (Math.random()-0.5)*15; shakeTime--; }
 
-            // Lógica Salto
+            // Lógica Jugador
             if(keys[' '] && !player.jumping) { player.jumping = true; player.vVel = -13; }
             if(player.jumping) {
                 player.z += player.vVel; player.vVel += 0.8;
                 if(player.z >= 0) { player.z = 0; player.jumping = false; }
             }
-
-            // Movimiento
             if(keys['w'] && player.y > 0) player.y -= player.speed;
             if(keys['s'] && player.y < 470) player.y += player.speed;
             if(keys['a'] && player.x > 0) player.x -= player.speed;
             if(keys['d'] && player.x < 770) player.x += player.speed;
 
-            // Enemigos y Ondas
-            enemies.forEach((en, i) => {
+            // Ondas y Barrido de Daño
+            shockwaves.forEach((sw, si) => {
+                sw.r += sw.fast ? 15 : 9;
+                
+                // Colisión física del aro con enemigos
+                if(sw.byPlayer && !sw.noDamage) {
+                    enemies.forEach((en, ei) => {
+                        let dx = (en.x + en.w/2) - sw.x;
+                        let dy = (en.y + en.h/2) - sw.y;
+                        let dist = Math.sqrt(dx*dx + dy*dy);
+                        
+                        // Si la onda pasa por el enemigo y no lo ha golpeado aún
+                        if(Math.abs(dist - sw.r) < 20 && !en.hitByWave.includes(sw.id)) {
+                            en.hp -= en.isBoss ? 20 : 100; // Daño masivo al jefe, instakill a otros
+                            en.hitByWave.push(sw.id);
+                            playSound(200, 'sawtooth', 0.2, 0.3, true);
+                            
+                            if(en.hp <= 0) {
+                                if(en.isBoss) hasAbility = true;
+                                enemies.splice(ei, 1); enemigosKilled++;
+                                if(enemigosKilled >= totalEnemigosNivel) { nivel++; enemigosKilled = 0; totalEnemigosNivel += 5; }
+                                spawnEnemies();
+                            }
+                        }
+                    });
+                } else if(!sw.byPlayer) {
+                    // Daño al jugador (Onda del Jefe)
+                    let dx = (player.x + 15) - sw.x;
+                    let dy = (player.y + 15) - sw.y;
+                    let d = Math.sqrt(dx*dx + dy*dy);
+                    if(Math.abs(d - sw.r) < 15 && !player.jumping) { 
+                        vida--; shockwaves.splice(si,1); 
+                        shakeTime = 10;
+                    }
+                }
+                if(sw.r > 700) shockwaves.splice(si,1);
+            });
+
+            // Enemigos
+            enemies.forEach((en) => {
                 let dx = (player.x + 15) - (en.x + en.w/2);
                 let dy = (player.y + 15) - (en.y + en.h/2);
                 let dist = Math.sqrt(dx*dx + dy*dy);
                 en.x += (dx/dist) * en.speed; en.y += (dy/dist) * en.speed;
 
-                // LOGICA ONDA JEFE
                 if(en.isBoss && Date.now() > en.nextSpecial) {
-                    shockwaves.push({ x: en.x+en.w/2, y: en.y+en.h/2, r: 0, byPlayer: false, color: '#ff003c' });
+                    shockwaves.push({ id: Date.now(), x: en.x+en.w/2, y: en.y+en.h/2, r: 0, byPlayer: false, color: '#ff003c' });
                     en.nextSpecial = Date.now() + 3500;
                     playSound(100, 'sine', 0.6, 0.2);
                 }
 
                 if(Date.now() - en.lastShot > (en.isBoss ? 700 : 1800)) {
-                    playSound(150, 'square', 0.1, 0.05, false);
                     let angle = Math.atan2(dy, dx);
                     enemyBullets.push({ x: en.x+en.w/2, y: en.y+en.h/2, vx: Math.cos(angle)*6, vy: Math.sin(angle)*6 });
                     en.lastShot = Date.now();
@@ -224,7 +283,7 @@
                         if(en.hp <= 0) {
                             if(en.isBoss) hasAbility = true;
                             enemies.splice(ei, 1); enemigosKilled++;
-                            if(enemigosKilled >= totalEnemigosNivel) { nivel++; enemigosKilled = 0; totalEnemigosNivel += 5; vida = 5; }
+                            if(enemigosKilled >= totalEnemigosNivel) { nivel++; enemigosKilled = 0; totalEnemigosNivel += 5; }
                             spawnEnemies();
                         }
                     }
@@ -239,33 +298,21 @@
                 }
             });
 
-            shockwaves.forEach((sw, i) => {
-                sw.r += 8;
-                if(!sw.byPlayer) {
-                    let d = Math.sqrt(Math.pow((player.x+15)-sw.x, 2) + Math.pow((player.y+15)-sw.y, 2));
-                    if(Math.abs(d - sw.r) < 15 && !player.jumping) { vida--; shockwaves.splice(i,1); }
-                }
-                if(sw.r > 600) shockwaves.splice(i,1);
-            });
-
-            // --- DIBUJO ---
+            // Dibujo
             ctx.save();
             ctx.translate(sx, sy);
             ctx.clearRect(-100, -100, canvas.width+200, canvas.height+200);
 
-            // 1. ONDAS (Debajo de todo)
             shockwaves.forEach(sw => {
                 ctx.shadowBlur = 20; ctx.shadowColor = sw.color;
-                ctx.strokeStyle = sw.color; ctx.lineWidth = 5;
+                ctx.strokeStyle = sw.color; ctx.lineWidth = sw.byPlayer ? 8 : 5;
                 ctx.beginPath(); ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI*2); ctx.stroke();
             });
 
-            // 2. BALAS
             ctx.shadowBlur = 10;
             bullets.forEach(b => { ctx.shadowColor = "white"; ctx.fillStyle = "white"; ctx.fillRect(b.x, b.y, 6, 6); });
             enemyBullets.forEach(eb => { ctx.shadowColor = "#ff003c"; ctx.fillStyle = "#ff003c"; ctx.fillRect(eb.x, eb.y, 6, 6); });
 
-            // 3. ENEMIGOS
             enemies.forEach(en => {
                 let isWhite = (Math.floor(Date.now()/250) % 2 === 0);
                 let color = en.isBoss ? (isWhite ? "#fff" : "#00f3ff") : (isWhite ? "#fff" : "#ff003c");
@@ -277,7 +324,6 @@
                 }
             });
 
-            // 4. JUGADOR (Siempre arriba)
             ctx.shadowBlur = 25; ctx.shadowColor = "white";
             ctx.fillStyle = "white";
             ctx.fillRect(player.x, player.y + player.z, 30, 30);
